@@ -278,3 +278,14 @@ if(BUILD_VIZ AND BUILD_PYTHON_BINDINGS)
 
     include("${CMAKE_CURRENT_LIST_DIR}/Mujoco.cmake")
 endif()
+
+# ==============================================================================
+# Chromium physical key table (vendored source, BSD-3-Clause; see chromium/README.md)
+# ==============================================================================
+# Header-only: consumers write <chromium/dom_code_data.inc>.
+add_library(chromium_dom_codes INTERFACE)
+target_include_directories(chromium_dom_codes
+    INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+add_library(third_party::chromium_dom_codes ALIAS chromium_dom_codes)
