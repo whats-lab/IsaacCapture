@@ -170,7 +170,9 @@ async def test_attach_existing_tab_clicks_without_navigation_or_tab_cleanup() ->
         patch.object(adb_module, "_close_stale_teleop_tabs") as close_tabs,
         patch.object(adb_module, "run_adb_headset_bookmark") as launch,
     ):
-        task = await adb_module.attach_existing_oob_tab(click_connect=True)
+        task = await adb_module.attach_existing_oob_tab(
+            resolved_port=48322, click_connect=True
+        )
         click.assert_awaited_once_with(
             "ws://teleop",
             refresh_static_assets=False,
@@ -205,9 +207,53 @@ async def test_attach_existing_tab_without_exact_oob_page_cleans_forward() -> No
         patch.object(adb_module, "_cdp_session_click_connect") as click,
     ):
         with pytest.raises(OobAdbError, match="no surviving teleop tab"):
-            await adb_module.attach_existing_oob_tab(click_connect=True)
+            await adb_module.attach_existing_oob_tab(
+                resolved_port=48322, click_connect=True
+            )
     click.assert_not_awaited()
     cleanup.assert_called_once_with(9223)
+
+
+@pytest.mark.asyncio
+async def test_attach_existing_tab_monitor_runs_with_real_signature() -> None:
+    """Regression test: attach_existing_oob_tab() must call the real (not mocked)
+    _monitor_teleop_error_banner() with a valid resolved_port, or the monitor task
+    fails immediately with TypeError (missing 1 required keyword-only argument:
+    'resolved_port') the instant it starts running - which a mocked monitor can't
+    catch, since the mock accepts any arguments."""
+    script = _MonitorScript(banners=[""])
+    async with _fake_cdp_ws(script) as ws_url:
+
+        async def immediate(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        with (
+            patch.object(adb_module.asyncio, "to_thread", side_effect=immediate),
+            patch.object(
+                adb_module, "_discover_devtools_socket", return_value="socket"
+            ),
+            patch.object(adb_module, "_adb_forward_cdp"),
+            patch.object(
+                adb_module,
+                "_cdp_list_tabs",
+                return_value=[
+                    {
+                        "url": "https://localhost:8080/?oobEnable=1",
+                        "webSocketDebuggerUrl": ws_url,
+                    }
+                ],
+            ),
+        ):
+            task = await adb_module.attach_existing_oob_tab(
+                resolved_port=48322, click_connect=False
+            )
+            # Give the task at least one real iteration on the real monitor loop
+            # before cancelling, so a TypeError at startup would actually surface.
+            await asyncio.sleep(1.5)
+            assert not task.done(), f"monitor task ended early: {task.exception()}"
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
 
 @patch("cloudxr_py_test_ns.oob_teleop_adb.shutil.which", return_value="/usr/bin/adb")
@@ -1295,8 +1341,8 @@ class _MonitorScript:
 async def test_monitor_relaunches_once_on_terminal_error_then_keeps_watching(
     capsys,
 ) -> None:
-    """A single error banner triggers exactly one relaunch; once reconnected to the new
-    tab, an unchanging banner there does not trigger a second one."""
+    """One terminal error causes one relaunch, followed by continued monitoring of an
+    error-free replacement tab (no second relaunch)."""
     script = _MonitorScript(banners=["", "Stream did not attach within 500ms"])
     new_ws_script = _MonitorScript(banners=[""])
     async with (
@@ -1329,6 +1375,48 @@ async def test_monitor_relaunches_once_on_terminal_error_then_keeps_watching(
     out = capsys.readouterr().err
     assert "Stream did not attach within 500ms" in out
     assert "relaunch succeeded" not in out  # that line goes to the logger, not stderr
+
+
+async def test_monitor_relaunch_closes_stale_tab_before_rediscovery() -> None:
+    """A relaunch closes the failed tab before re-firing am start, so
+    _find_and_click_teleop_tab()'s Case C (existing tab already on our URL,
+    unchanged since snapshot) can't re-select the stale failed tab instead of
+    waiting for am start's fresh replacement - regression test for the bug
+    where a surviving failed tab with an unchanged oobEnable= URL could be
+    matched ahead of a genuinely fresh one."""
+    script = _MonitorScript(banners=["", "Stream did not attach within 500ms"])
+    new_ws_script = _MonitorScript(banners=[""])
+    order: list[str] = []
+    async with (
+        _fake_cdp_ws(script) as ws_url,
+        _fake_cdp_ws(new_ws_script) as new_ws_url,
+    ):
+        with (
+            patch(
+                "cloudxr_py_test_ns.oob_teleop_adb._close_stale_teleop_tabs",
+                side_effect=lambda: order.append("close") or 1,
+            ),
+            patch(
+                "cloudxr_py_test_ns.oob_teleop_adb.run_adb_headset_bookmark",
+                side_effect=lambda **_kw: order.append("am_start") or (0, ""),
+            ),
+            patch(
+                "cloudxr_py_test_ns.oob_teleop_adb._find_and_click_teleop_tab",
+                side_effect=lambda **_kw: order.append("find_tab") or new_ws_url,
+            ) as mock_relaunch,
+        ):
+            task = asyncio.create_task(
+                _monitor_teleop_error_banner(
+                    ws_url, _CDP_LOCAL_PORT, resolved_port=48322
+                )
+            )
+            await asyncio.sleep(2.5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert mock_relaunch.call_count == 1
+    assert order == ["close", "am_start", "find_tab"]
 
 
 async def test_monitor_gives_up_after_max_consecutive_relaunch_failures(capsys) -> None:

@@ -2197,7 +2197,7 @@ async def test_terminal_event_clicks_same_tab_once_and_distinct_event_can_retry(
     lifecycle._client_grace_deadline = lifecycle.clock() + 20
     clicks = []
 
-    async def attach(*, click_connect, on_dispatched=None):
+    async def attach(*, click_connect, on_dispatched=None, **_kwargs):
         clicks.append(click_connect)
         if on_dispatched:
             on_dispatched()

@@ -1748,14 +1748,19 @@ async def _cdp_session_click_connect(
 
 async def attach_existing_oob_tab(
     *,
+    resolved_port: int,
     click_connect: bool = False,
     on_dispatched: Callable[[], None] | None = None,
+    usb_local: bool = False,
+    host_client: bool = False,
 ) -> asyncio.Task:
     """Attach CDP monitoring to a surviving OOB tab without navigating it.
 
     When *click_connect* is true, dispatch one trusted CONNECT click in the
     existing tab. This path never closes tabs, invokes ``am start``, reloads,
-    or creates a new browser page.
+    or creates a new browser page. *resolved_port*/*usb_local*/*host_client*
+    are forwarded to the monitor's own relaunch path, same as
+    :func:`run_oob_connect`.
     """
     socket_name = await asyncio.to_thread(_discover_devtools_socket)
     if not socket_name:
@@ -1784,7 +1789,13 @@ async def attach_existing_oob_tab(
                 on_dispatched=on_dispatched,
             )
         return asyncio.create_task(
-            _monitor_teleop_error_banner(ws_url, _CDP_LOCAL_PORT),
+            _monitor_teleop_error_banner(
+                ws_url,
+                _CDP_LOCAL_PORT,
+                resolved_port=resolved_port,
+                usb_local=usb_local,
+                host_client=host_client,
+            ),
             name="cloudxr-oob-error-monitor",
         )
     except BaseException:
@@ -1841,7 +1852,7 @@ async def _find_and_click_teleop_tab(
     # new tabs and existing tabs that were navigated to the new URL by am start.
     tabs_url_before = {
         t["id"]: (t.get("url") or "")
-        for t in _cdp_list_tabs(_CDP_LOCAL_PORT)
+        for t in await asyncio.to_thread(_cdp_list_tabs, _CDP_LOCAL_PORT)
         if "id" in t
     }
     log.info("CDP: %d tab(s) before navigation", len(tabs_url_before))
@@ -1855,7 +1866,7 @@ async def _find_and_click_teleop_tab(
     retry_at = time.monotonic() + (timeout / 2)
     while ws_url is None and time.monotonic() < deadline:
         await asyncio.sleep(1.0)
-        for tab in _cdp_list_tabs(_CDP_LOCAL_PORT):
+        for tab in await asyncio.to_thread(_cdp_list_tabs, _CDP_LOCAL_PORT):
             if "id" not in tab or not tab.get("webSocketDebuggerUrl"):
                 continue
             old_url = tabs_url_before.get(tab["id"])
@@ -2135,20 +2146,18 @@ async def _monitor_teleop_error_banner(
     """Forward ``errorMessageBox`` content from the web client into the server log, and
     automatically relaunch the teleop tab when a genuine (terminal) client error appears.
 
-    Opens its own CDP session and polls the DOM once per second. A banner with class
-    ``error`` (not ``success``/``info``, which are non-fatal status messages - notably,
-    CloudXRComponent's own bounded mid-retry "Reconnecting (n/max)" status is class
-    ``info``, so this only ever fires once the client itself has given up retrying)
-    triggers a relaunch: re-fire ``am start`` and re-click CONNECT on the resulting tab
-    via :func:`_find_and_click_teleop_tab`, reusing the adb forward already up on
-    *local_port* rather than rediscovering the DevTools socket. De-dupes identical
-    messages so a banner that remains displayed logs/repairs once.
+    Polls the DOM once per second over its own CDP session. Only class ``error`` banners
+    trigger a relaunch — CloudXRComponent's bounded mid-retry "Reconnecting (n/max)"
+    status is class ``info``, so this only fires once the client has given up retrying.
+    A relaunch re-fires ``am start`` and re-clicks CONNECT via
+    :func:`_find_and_click_teleop_tab`, reusing the adb forward already up on
+    *local_port*. De-dupes identical messages so a banner that remains displayed
+    logs/repairs once.
 
     Bounded by two independent guards (:data:`_MAX_CONSECUTIVE_RELAUNCH_FAILURES`,
-    :data:`_MAX_RELAUNCHES_PER_WINDOW` - see their doc comments) so a genuinely broken
-    headset/network doesn't trigger relaunches forever. Once either trips, auto-repair is
-    disabled for the rest of this monitor's life, but it keeps running and logging new
-    error banners, same as before this feature existed.
+    :data:`_MAX_RELAUNCHES_PER_WINDOW`) so a genuinely broken headset/network doesn't
+    relaunch forever; once either trips, auto-repair is disabled for this monitor's
+    life, but banner logging continues.
 
     Runs until the task is cancelled (normal shutdown) or the WebSocket drops with no
     further repair attempted.  Always tears down the ``adb forward`` on exit.
@@ -2174,6 +2183,7 @@ async def _monitor_teleop_error_banner(
     auto_repair_disabled = False
 
     def _give_up_auto_repair(reason: str) -> None:
+        """Permanently disable relaunch for this monitor and notify the operator."""
         nonlocal auto_repair_disabled
         auto_repair_disabled = True
         log.error(
@@ -2250,6 +2260,12 @@ async def _monitor_teleop_error_banner(
 
             log.warning("monitor: relaunching teleop tab after terminal client error")
             try:
+                # Close the failed tab first, same as run_oob_connect()'s own Step 0:
+                # without this, _find_and_click_teleop_tab()'s Case C ("existing tab
+                # already on our URL, unchanged since snapshot") can match the stale
+                # failed tab instead of waiting for am start's fresh replacement, since
+                # the failed tab is still open with an unchanged oobEnable= URL.
+                await asyncio.to_thread(_close_stale_teleop_tabs)
                 rc, diag = await asyncio.to_thread(
                     run_adb_headset_bookmark,
                     resolved_port=resolved_port,

@@ -498,7 +498,12 @@ class OobLifecycle:
             return True
         self.monitor = None
         try:
-            self.monitor = await adb.attach_existing_oob_tab(click_connect=False)
+            self.monitor = await adb.attach_existing_oob_tab(
+                resolved_port=self.resolved_port,
+                click_connect=False,
+                usb_local=self.usb_local,
+                host_client=self.host_client,
+            )
         except adb.OobAdbError:
             log.info(
                 "Existing browser is healthy through OOB but CDP is not attachable"
@@ -520,7 +525,11 @@ class OobLifecycle:
 
         try:
             self.monitor = await adb.attach_existing_oob_tab(
-                click_connect=True, on_dispatched=on_dispatched
+                resolved_port=self.resolved_port,
+                click_connect=True,
+                on_dispatched=on_dispatched,
+                usb_local=self.usb_local,
+                host_client=self.host_client,
             )
         except adb.OobAdbError:
             self.monitor = None
