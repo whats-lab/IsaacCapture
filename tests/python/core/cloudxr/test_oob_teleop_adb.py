@@ -1394,7 +1394,7 @@ async def test_monitor_relaunch_closes_stale_tab_before_rediscovery() -> None:
         with (
             patch(
                 "cloudxr_py_test_ns.oob_teleop_adb._close_stale_teleop_tabs",
-                side_effect=lambda: order.append("close") or 1,
+                side_effect=lambda **_kw: order.append("close") or 1,
             ),
             patch(
                 "cloudxr_py_test_ns.oob_teleop_adb.run_adb_headset_bookmark",
@@ -1421,7 +1421,9 @@ async def test_monitor_relaunch_closes_stale_tab_before_rediscovery() -> None:
 
 async def test_monitor_gives_up_after_max_consecutive_relaunch_failures(capsys) -> None:
     """Auto-repair disables itself after _MAX_CONSECUTIVE_RELAUNCH_FAILURES failed relaunch
-    attempts, rather than retrying forever."""
+    attempts, rather than retrying forever. Each failed attempt already closed the old tab
+    (see test_monitor_relaunch_closes_stale_tab_before_rediscovery), so once the monitor gives
+    up it has nothing left to watch and exits on its own - no external cancellation needed."""
     script = _MonitorScript(banners=["Stream did not attach within 500ms"])
     async with _fake_cdp_ws(script) as ws_url:
         with (
@@ -1439,12 +1441,11 @@ async def test_monitor_gives_up_after_max_consecutive_relaunch_failures(capsys) 
                     ws_url, _CDP_LOCAL_PORT, resolved_port=48322
                 )
             )
-            # Every reconnect immediately re-sees the same (never-changing) banner text,
-            # so failures accumulate quickly; margin above the bare minimum poll count.
-            await asyncio.sleep(2.0 * (_MAX_CONSECUTIVE_RELAUNCH_FAILURES + 1))
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            # Every relaunch attempt fails immediately, so failures accumulate quickly;
+            # margin above the bare minimum needed for the monitor to give up and return.
+            await asyncio.wait_for(
+                task, timeout=2.0 * (_MAX_CONSECUTIVE_RELAUNCH_FAILURES + 1)
+            )
 
     assert mock_relaunch.call_count == _MAX_CONSECUTIVE_RELAUNCH_FAILURES
     out = capsys.readouterr().err

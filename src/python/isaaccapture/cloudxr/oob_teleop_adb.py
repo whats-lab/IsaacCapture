@@ -1273,12 +1273,17 @@ def _cdp_list_tabs(local_port: int) -> list[dict]:
         return []
 
 
-def _close_stale_teleop_tabs() -> int:
+def _close_stale_teleop_tabs(*, keep_forward: bool = False) -> int:
     """Close any pre-existing teleop tabs (matched on ``oobEnable=``) before opening a new one.
 
     Why: an errored prior session can leave a tab holding XR resources,
     silently blocking ``requestSession()`` in the next tab. Best-effort —
     no-op if the browser isn't running. Returns the number closed.
+
+    *keep_forward*: skip tearing down the ``_CDP_LOCAL_PORT`` adb forward this function sets
+    up for itself. Needed when a caller (the monitor's repair path) already owns a forward on
+    the same port for its own, unrelated purposes — tearing it down here would pull it out
+    from under that caller, which assumes it stays up across this call.
     """
     socket_name = _discover_devtools_socket()
     if not socket_name:
@@ -1316,7 +1321,8 @@ def _close_stale_teleop_tabs() -> int:
                     "stale-tab cleanup: failed to close tab id=%s: %s", tab_id, exc
                 )
     finally:
-        _adb_forward_remove(_CDP_LOCAL_PORT)
+        if not keep_forward:
+            _adb_forward_remove(_CDP_LOCAL_PORT)
     return closed
 
 
@@ -2156,8 +2162,10 @@ async def _monitor_teleop_error_banner(
 
     Bounded by two independent guards (:data:`_MAX_CONSECUTIVE_RELAUNCH_FAILURES`,
     :data:`_MAX_RELAUNCHES_PER_WINDOW`) so a genuinely broken headset/network doesn't
-    relaunch forever; once either trips, auto-repair is disabled for this monitor's
-    life, but banner logging continues.
+    relaunch forever. The window guard trips before the failed tab is closed, so banner
+    logging continues on it with auto-repair disabled. The consecutive-failure guard
+    trips only after a relaunch attempt itself failed, which already closed the old tab -
+    there's nothing left to watch, so this ends the monitor instead.
 
     Runs until the task is cancelled (normal shutdown) or the WebSocket drops with no
     further repair attempted.  Always tears down the ``adb forward`` on exit.
@@ -2199,7 +2207,10 @@ async def _monitor_teleop_error_banner(
     try:
         while True:
             last_banner = ""
-            relaunch_needed = False
+            # The only normal (non-raising) way out of the inner polling loop below is its
+            # own break, once a banner needing relaunch appears - if auto-repair is
+            # disabled, a banner just updates last_banner and polling continues instead.
+            # So reaching the end of this "async with" always means relaunch is needed.
             async with ws_connect(ws_url) as ws:
                 # Keep errors suppressed so the tab never stops rendering because of
                 # a stray cert hiccup on a later navigation.
@@ -2240,12 +2251,8 @@ async def _monitor_teleop_error_banner(
                             flush=True,
                         )
                         if not auto_repair_disabled:
-                            relaunch_needed = True
                             break
                     last_banner = banner
-
-            if not relaunch_needed:
-                break
 
             now = time.monotonic()
             relaunch_timestamps = [
@@ -2258,47 +2265,72 @@ async def _monitor_teleop_error_banner(
                 )
                 continue
 
-            log.warning("monitor: relaunching teleop tab after terminal client error")
-            try:
-                # Close the failed tab first, same as run_oob_connect()'s own Step 0:
-                # without this, _find_and_click_teleop_tab()'s Case C ("existing tab
-                # already on our URL, unchanged since snapshot") can match the stale
-                # failed tab instead of waiting for am start's fresh replacement, since
-                # the failed tab is still open with an unchanged oobEnable= URL.
-                await asyncio.to_thread(_close_stale_teleop_tabs)
-                rc, diag = await asyncio.to_thread(
-                    run_adb_headset_bookmark,
-                    resolved_port=resolved_port,
-                    usb_local=usb_local,
-                    host_client=host_client,
-                )
-                if rc != 0:
-                    hint = adb_automation_failure_hint(diag)
-                    raise OobAdbError(oob_adb_automation_message(rc, diag, hint))
-                ws_url = await _find_and_click_teleop_tab(
-                    resolved_port=resolved_port,
-                    deadline=time.monotonic() + _RELAUNCH_TIMEOUT_SECONDS,
-                    timeout=_RELAUNCH_TIMEOUT_SECONDS,
-                    usb_local=usb_local,
-                    host_client=host_client,
-                )
-            except Exception as exc:
-                consecutive_relaunch_failures += 1
+            # Keep retrying the relaunch itself on failure - never fall through to the
+            # outer loop's ws_connect(ws_url) above once _close_stale_teleop_tabs() below
+            # has run: it closes the tab ws_url currently points at, so reconnecting to
+            # the same stale ws_url would just raise and silently end the whole monitor,
+            # bypassing _MAX_CONSECUTIVE_RELAUNCH_FAILURES and _give_up_auto_repair below.
+            while True:
                 log.warning(
-                    "monitor: relaunch attempt %d/%d failed: %s",
-                    consecutive_relaunch_failures,
-                    _MAX_CONSECUTIVE_RELAUNCH_FAILURES,
-                    exc,
+                    "monitor: relaunching teleop tab after terminal client error"
                 )
-                if consecutive_relaunch_failures >= _MAX_CONSECUTIVE_RELAUNCH_FAILURES:
-                    _give_up_auto_repair(
-                        f"{consecutive_relaunch_failures} consecutive relaunch failures"
+                try:
+                    # Close the failed tab first, same as run_oob_connect()'s own Step 0:
+                    # without this, _find_and_click_teleop_tab()'s Case C ("existing tab
+                    # already on our URL, unchanged since snapshot") can match the stale
+                    # failed tab instead of waiting for am start's fresh replacement, since
+                    # the failed tab is still open with an unchanged oobEnable= URL.
+                    # keep_forward=True: this monitor already owns the _CDP_LOCAL_PORT
+                    # forward (set up by whichever caller spawned it - run_oob_connect() or
+                    # attach_existing_oob_tab() - and kept alive for the monitor's whole
+                    # life) - _close_stale_teleop_tabs() must not tear it down out from
+                    # under _find_and_click_teleop_tab() below, which assumes it's already
+                    # up.
+                    await asyncio.to_thread(_close_stale_teleop_tabs, keep_forward=True)
+                    rc, diag = await asyncio.to_thread(
+                        run_adb_headset_bookmark,
+                        resolved_port=resolved_port,
+                        usb_local=usb_local,
+                        host_client=host_client,
                     )
-                continue
-            else:
-                log.info("monitor: relaunch succeeded, resuming error-banner tracking")
-                consecutive_relaunch_failures = 0
-                relaunch_timestamps.append(now)
+                    if rc != 0:
+                        hint = adb_automation_failure_hint(diag)
+                        raise OobAdbError(oob_adb_automation_message(rc, diag, hint))
+                    ws_url = await _find_and_click_teleop_tab(
+                        resolved_port=resolved_port,
+                        deadline=time.monotonic() + _RELAUNCH_TIMEOUT_SECONDS,
+                        timeout=_RELAUNCH_TIMEOUT_SECONDS,
+                        usb_local=usb_local,
+                        host_client=host_client,
+                    )
+                except Exception as exc:
+                    consecutive_relaunch_failures += 1
+                    log.warning(
+                        "monitor: relaunch attempt %d/%d failed: %s",
+                        consecutive_relaunch_failures,
+                        _MAX_CONSECUTIVE_RELAUNCH_FAILURES,
+                        exc,
+                    )
+                    if (
+                        consecutive_relaunch_failures
+                        >= _MAX_CONSECUTIVE_RELAUNCH_FAILURES
+                    ):
+                        _give_up_auto_repair(
+                            f"{consecutive_relaunch_failures} consecutive relaunch "
+                            "failures"
+                        )
+                        # The tab _close_stale_teleop_tabs() just closed is gone and
+                        # we're not retrying again - nothing valid left for the outer
+                        # loop to reconnect to.
+                        return
+                    continue
+                else:
+                    log.info(
+                        "monitor: relaunch succeeded, resuming error-banner tracking"
+                    )
+                    consecutive_relaunch_failures = 0
+                    relaunch_timestamps.append(now)
+                    break
     except asyncio.CancelledError:
         log.info("monitor: cancelled")
         raise
