@@ -522,11 +522,9 @@ def test_build_teleop_url_forwards_reliability_config_from_env(
 ) -> None:
     """TELEOP_CLIENT_* reconnect/warm-up env vars reach the bookmark URL end to end.
 
-    Without this, a real headset launch leaves reconnectEnabled/streamAttachTimeoutMs/
-    warmupBeginTimeoutMs/warmupEndTimeoutMs at their client-side defaults no matter what
-    the operator sets in the environment - client_ui_fields_from_env() is a generic dict
-    merge (build_teleop_url -> build_headset_bookmark_url), so this exercises the whole
-    chain rather than just the two boundary functions in test_oob_teleop_env.py.
+    client_ui_fields_from_env() is a generic dict merge (build_teleop_url ->
+    build_headset_bookmark_url), so this exercises the whole launch-path chain rather than
+    just the two boundary functions in test_oob_teleop_env.py.
     """
     from cloudxr_py_test_ns.oob_teleop_adb import build_teleop_url
 

@@ -426,14 +426,10 @@ def client_ui_fields_from_env() -> dict:
         out["panelHiddenAtStart"] = True
     elif ph in ("0", "false", "no", "off"):
         out["panelHiddenAtStart"] = False
-    re_enabled = os.environ.get("TELEOP_CLIENT_RECONNECT_ENABLED", "").strip().lower()
-    if re_enabled in ("1", "true", "yes", "on"):
-        out["reconnectEnabled"] = True
-    elif re_enabled in ("0", "false", "no", "off"):
-        out["reconnectEnabled"] = False
+    # reconnectEnabled/reconnectMaxAttempts/reconnectDelayMs are already set above by
+    # client_reconnect_config_from_env(), which validates them and raises on bad input - do not
+    # re-parse them here with this loop's silent-skip-on-ValueError semantics.
     for env_name, key in (
-        ("TELEOP_CLIENT_RECONNECT_MAX_ATTEMPTS", "reconnectMaxAttempts"),
-        ("TELEOP_CLIENT_RECONNECT_DELAY_MS", "reconnectDelayMs"),
         ("TELEOP_CLIENT_STREAM_ATTACH_TIMEOUT_MS", "streamAttachTimeoutMs"),
         ("TELEOP_CLIENT_WARMUP_BEGIN_TIMEOUT_MS", "warmupBeginTimeoutMs"),
         ("TELEOP_CLIENT_WARMUP_END_TIMEOUT_MS", "warmupEndTimeoutMs"),
