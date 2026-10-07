@@ -393,7 +393,7 @@ def _load_hand_tracking_provider(
             description=(
                 "Hand-tracking data provider. 'native' uses runtime-provided "
                 "OpenXR hands, starts no plugin, and has no effect when tracked "
-                "hands are not consumed. 'manus'/'wuji' use glove-provided "
+                "hands are not consumed. 'manus'/'wuji'/'airglove' use glove-provided "
                 "OpenXR hands."
             ),
             additional_constraints=f"Must be one of {HAND_TRACKING_PROVIDERS}.",
@@ -404,7 +404,7 @@ def _load_hand_tracking_provider(
         False,
         ParameterDescriptor(
             description=(
-                "Use a MANUS or Wuji provider plugin started outside this node. "
+                "Use a MANUS, Wuji or AirGlove provider plugin started outside this node. "
                 "Leave false to start the selected provider plugin automatically "
                 "with a live session."
             )

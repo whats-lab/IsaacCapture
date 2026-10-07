@@ -69,6 +69,7 @@ Table of Contents
    device/oak
    device/oglo
    device/wuji_glove
+   device/airglove
    device/sharpa_avatar
    device/haptikos
 

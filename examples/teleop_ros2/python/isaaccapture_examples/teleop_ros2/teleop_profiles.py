@@ -199,7 +199,10 @@ def resolve_teleop_profile_spec(
     ):
         if hand_tracking_provider == HandTrackingProvider.MANUS:
             profile = TeleopProfile.CONTROLLER_TELEOP_WITH_HAND_MANUS_EE
-        elif hand_tracking_provider == HandTrackingProvider.WUJI:
+        elif hand_tracking_provider in (
+            HandTrackingProvider.WUJI,
+            HandTrackingProvider.AIRGLOVE,
+        ):
             profile = TeleopProfile.CONTROLLER_TELEOP_WITH_HAND_WRIST_EE
         else:
             profile = TeleopProfile.CONTROLLER_TELEOP_WITH_HAND_CONTROLLER_EE

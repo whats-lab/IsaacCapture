@@ -125,16 +125,21 @@ def test_controller_profile_spec_resolution(
 
 
 @pytest.mark.parametrize(
+    "provider",
+    (HandTrackingProvider.WUJI, HandTrackingProvider.AIRGLOVE),
+)
+@pytest.mark.parametrize(
     "retargeter",
     (HandRetargeter.DEXPILOT, HandRetargeter.PINK_IK, HandRetargeter.WUJI),
 )
-def test_controller_wuji_provider_uses_provider_wrist_for_every_retargeter(
+def test_controller_glove_provider_uses_provider_wrist_for_every_retargeter(
     retargeter: HandRetargeter,
+    provider: HandTrackingProvider,
 ) -> None:
     profile_spec = resolve_teleop_profile_spec(
         TeleopMode.CONTROLLER_TELEOP,
         retargeter,
-        HandTrackingProvider.WUJI,
+        provider,
     )
 
     assert (
@@ -233,13 +238,26 @@ def test_managed_plugin_config_is_inferred_from_provider(tmp_path) -> None:
         plugin_search_paths=(tmp_path,),
     )
 
+    airglove_params = SimpleNamespace(
+        hand_tracking_provider=HandTrackingProvider.AIRGLOVE,
+        use_external_hand_tracking_plugin=False,
+        session_mode=SessionMode.LIVE,
+        plugin_search_paths=(tmp_path,),
+    )
+
     manus_config = session_config._resolve_hand_tracking_plugin_configs(manus_params)[0]
     wuji_config = session_config._resolve_hand_tracking_plugin_configs(wuji_params)[0]
+    airglove_config = session_config._resolve_hand_tracking_plugin_configs(
+        airglove_params
+    )[0]
 
     assert manus_config.plugin_name == "manus_hand_plugin"
     assert manus_config.plugin_args == ["--datasets=human"]
     assert wuji_config.plugin_name == "wuji_glove_plugin"
     assert wuji_config.plugin_args == []
+    assert airglove_config.plugin_name == "airglove_plugin"
+    assert airglove_config.plugin_root_id == "airglove"
+    assert airglove_config.plugin_args == []
 
 
 def test_plugin_config_is_empty_for_external_provider_or_replay(tmp_path) -> None:

@@ -137,6 +137,15 @@ def _resolve_hand_tracking_plugin_configs(
                 required=True,
             )
         ]
+    if params.hand_tracking_provider == HandTrackingProvider.AIRGLOVE:
+        return [
+            PluginConfig(
+                plugin_name="airglove_plugin",
+                plugin_root_id="airglove",
+                search_paths=list(params.plugin_search_paths),
+                required=True,
+            )
+        ]
     raise ValueError(
         f"Cannot start a plugin for hand-tracking provider "
         f"{params.hand_tracking_provider!r}"

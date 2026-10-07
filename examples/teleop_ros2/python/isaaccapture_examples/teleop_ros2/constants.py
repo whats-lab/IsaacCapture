@@ -24,6 +24,7 @@ class HandTrackingProvider(StrEnum):
     NATIVE = "native"
     MANUS = "manus"
     WUJI = "wuji"
+    AIRGLOVE = "airglove"
 
 
 class TeleopMode(StrEnum):

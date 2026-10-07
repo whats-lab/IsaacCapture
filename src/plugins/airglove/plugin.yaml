@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 WHATs LAB Corp. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: airglove_plugin
+description: "AirGlove hand tracking from the Spine app"
+command: "./airglove_plugin"
+version: "1.0.0"
+args:
+  - "--address=127.0.0.1"
+  - "--port=4040"
+devices:
+  - path: "/hand/left"
+    type: "hand_tracker"
+    description: "Left AirGlove"
+  - path: "/hand/right"
+    type: "hand_tracker"
+    description: "Right AirGlove"
